@@ -109,6 +109,7 @@ export class Quiz {
       this.scene.input.keyboard?.on("keydown-ENTER", continueHandler);
 
       const choose = (i: number) => {
+        if (answered) return;
         const correct = i === q.correctIndex;
         if (correct) {
           answered = true;

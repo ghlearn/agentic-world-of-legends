@@ -110,8 +110,8 @@ export class TitleScene extends Phaser.Scene {
       }
       this.scene.start("Intro");
     };
-    this.input.keyboard?.once("keydown-SPACE", () => void start());
-    this.input.keyboard?.once("keydown-ENTER", () => void start());
-    prompt.once("pointerdown", () => void start());
+    this.input.keyboard?.on("keydown-SPACE", () => void start());
+    this.input.keyboard?.on("keydown-ENTER", () => void start());
+    prompt.on("pointerdown", () => void start());
   }
 }

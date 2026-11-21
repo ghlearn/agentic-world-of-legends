@@ -48,6 +48,8 @@ const TOKEN_PREFIX = "agentic-world:booth-token:";
 const PENDING_PREFIX = "agentic-world:pending-score:";
 const listeners = new Map<string, Set<(update: ScoreSubmissionUpdate) => void>>();
 const submissionsInFlight = new Set<string>();
+const fallbackLocalStorage = new Map<string, string>();
+const fallbackSessionStorage = new Map<string, string>();
 let replayStarted = false;
 
 export function eventConfigFromLocation(
@@ -71,7 +73,7 @@ export function calculateScore(summary: Pick<RunSummary, "credentialsCompleted" 
 
 export function beginRun(config: EventConfig | undefined, nickname: string, now = Date.now()): void {
   if (!config) {
-    sessionStorage.removeItem(RUN_KEY);
+    storageRemove("session", RUN_KEY);
     return;
   }
   const safeNickname = nickname.trim().slice(0, 32) || "Guest";
@@ -85,7 +87,7 @@ export function beginRun(config: EventConfig | undefined, nickname: string, now 
     elapsedMs: 0,
     startedAt: now,
   };
-  sessionStorage.setItem(RUN_KEY, JSON.stringify(run));
+  storageSet("session", RUN_KEY, JSON.stringify(run));
 }
 
 export function recordWrongAnswer(now = Date.now()): void {
@@ -93,7 +95,7 @@ export function recordWrongAnswer(now = Date.now()): void {
   if (!run) return;
   run.wrongAnswers += 1;
   run.elapsedMs = Math.max(0, now - run.startedAt);
-  sessionStorage.setItem(RUN_KEY, JSON.stringify(run));
+  storageSet("session", RUN_KEY, JSON.stringify(run));
 }
 
 export function recordCredential(now = Date.now()): void {
@@ -101,7 +103,7 @@ export function recordCredential(now = Date.now()): void {
   if (!run) return;
   run.credentialsCompleted = Math.min(LEVEL_COUNT, run.credentialsCompleted + 1);
   run.elapsedMs = Math.max(0, now - run.startedAt);
-  sessionStorage.setItem(RUN_KEY, JSON.stringify(run));
+  storageSet("session", RUN_KEY, JSON.stringify(run));
 }
 
 export function currentRun(now = Date.now()): RunSummary | undefined {
@@ -138,7 +140,7 @@ export async function submitRun(config: EventConfig, summary: RunSummary): Promi
 
 export function queueRunSubmission(config: EventConfig, summary: RunSummary): void {
   const key = pendingKey(config, summary.runId);
-  localStorage.setItem(key, JSON.stringify({ config, summary } satisfies PendingScore));
+  storageSet("local", key, JSON.stringify({ config, summary } satisfies PendingScore));
   void replayPendingScore(key);
 }
 
@@ -159,8 +161,7 @@ export function startPendingScoreReplay(): void {
   if (replayStarted) return;
   replayStarted = true;
   const replay = () => {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
+    for (const key of storageKeys("local")) {
       if (key?.startsWith(PENDING_PREFIX)) void replayPendingScore(key);
     }
   };
@@ -181,7 +182,7 @@ export async function pairBooth(config: EventConfig, code: string): Promise<void
   if (!response.ok) throw new Error(`Booth pairing failed (${response.status})`);
   const payload = (await response.json()) as { token?: string };
   if (!payload.token) throw new Error("Booth pairing returned no token");
-  localStorage.setItem(tokenKey(config), payload.token);
+  storageSet("local", tokenKey(config), payload.token);
 }
 
 export function boothIsPaired(config: EventConfig): boolean {
@@ -196,7 +197,7 @@ export async function fetchLeaderboard(config: EventConfig): Promise<Leaderboard
 }
 
 function boothToken(config: EventConfig): string | null {
-  return localStorage.getItem(tokenKey(config));
+  return storageGet("local", tokenKey(config));
 }
 
 function tokenKey(config: EventConfig): string {
@@ -211,18 +212,18 @@ async function replayPendingScore(key: string): Promise<void> {
   if (submissionsInFlight.has(key)) return;
   const pending = readPendingScore(key);
   if (!pending) {
-    localStorage.removeItem(key);
+    storageRemove("local", key);
     return;
   }
   submissionsInFlight.add(key);
   notify(pending.summary.runId, { status: "pending" });
   try {
     const entries = await submitRun(pending.config, pending.summary);
-    localStorage.removeItem(key);
+    storageRemove("local", key);
     notify(pending.summary.runId, { status: "submitted", entries });
   } catch (error) {
     if (error instanceof LeaderboardRequestError && error.status < 500) {
-      localStorage.removeItem(key);
+      storageRemove("local", key);
       notify(pending.summary.runId, { status: "rejected", error });
     }
   } finally {
@@ -231,7 +232,7 @@ async function replayPendingScore(key: string): Promise<void> {
 }
 
 function readPendingScore(key: string): PendingScore | undefined {
-  const raw = localStorage.getItem(key);
+  const raw = storageGet("local", key);
   if (!raw) return undefined;
   try {
     const pending = JSON.parse(raw) as PendingScore;
@@ -252,7 +253,7 @@ function notify(runId: string, update: ScoreSubmissionUpdate): void {
 }
 
 function readStoredRun(): StoredRun | undefined {
-  const raw = sessionStorage.getItem(RUN_KEY);
+  const raw = storageGet("session", RUN_KEY);
   if (!raw) return undefined;
   try {
     const value = JSON.parse(raw) as Partial<StoredRun>;
@@ -276,4 +277,49 @@ function readStoredRun(): StoredRun | undefined {
   } catch {
     return undefined;
   }
+}
+
+type StorageKind = "local" | "session";
+
+function storageGet(kind: StorageKind, key: string): string | null {
+  try {
+    return browserStorage(kind).getItem(key) ?? fallbackStorage(kind).get(key) ?? null;
+  } catch {
+    return fallbackStorage(kind).get(key) ?? null;
+  }
+}
+
+function storageSet(kind: StorageKind, key: string, value: string): void {
+  fallbackStorage(kind).set(key, value);
+  try {
+    browserStorage(kind).setItem(key, value);
+  } catch {}
+}
+
+function storageRemove(kind: StorageKind, key: string): void {
+  fallbackStorage(kind).delete(key);
+  try {
+    browserStorage(kind).removeItem(key);
+  } catch {}
+}
+
+function storageKeys(kind: StorageKind): string[] {
+  try {
+    const storage = browserStorage(kind);
+    return [...new Set([
+      ...Array.from({ length: storage.length }, (_, index) => storage.key(index))
+        .filter((key): key is string => key !== null),
+      ...fallbackStorage(kind).keys(),
+    ])];
+  } catch {
+    return [...fallbackStorage(kind).keys()];
+  }
+}
+
+function browserStorage(kind: StorageKind): Storage {
+  return kind === "local" ? localStorage : sessionStorage;
+}
+
+function fallbackStorage(kind: StorageKind): Map<string, string> {
+  return kind === "local" ? fallbackLocalStorage : fallbackSessionStorage;
 }

@@ -34,3 +34,13 @@ export function csvCell(value: string | number): string {
   const neutralized = typeof value === "string" && /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   return `"${neutralized.replaceAll("\"", "\"\"")}"`;
 }
+
+export function submittedScoresMatch(left: RankedScore, right: RankedScore): boolean {
+  return (
+    left.boothId === right.boothId &&
+    left.nickname === right.nickname &&
+    left.credentialsCompleted === right.credentialsCompleted &&
+    left.wrongAnswers === right.wrongAnswers &&
+    left.elapsedMs === right.elapsedMs
+  );
+}

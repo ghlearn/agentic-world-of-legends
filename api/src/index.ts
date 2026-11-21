@@ -1,7 +1,13 @@
 import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } from "@azure/functions";
 import { TableClient, odata, type TableEntity } from "@azure/data-tables";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { calculateScore, csvCell, rankScores, type RankedScore } from "./ranking.js";
+import {
+  calculateScore,
+  csvCell,
+  rankScores,
+  submittedScoresMatch,
+  type RankedScore,
+} from "./ranking.js";
 
 interface EventEntity extends TableEntity {
   etag?: string;
@@ -92,6 +98,15 @@ async function leaderboard(eventId: string): Promise<Array<RankedScore & { rank:
     });
   }
   return rankScores(rows);
+}
+
+async function readScore(eventId: string, runId: string): Promise<ScoreEntity | undefined> {
+  try {
+    return await leaderboardTable.getEntity<ScoreEntity>(`event:${eventId}`, `score:${runId}`);
+  } catch (error) {
+    if ((error as { statusCode?: number }).statusCode === 404) return undefined;
+    throw error;
+  }
 }
 
 app.http("cors", {
@@ -224,6 +239,12 @@ app.http("submitScore", {
       score: calculateScore(credentialsCompleted, wrongAnswers, elapsedMs),
       acceptedAt: new Date().toISOString(),
     };
+    const existing = await readScore(eventId, runId);
+    if (existing) {
+      return submittedScoresMatch(existing, entity)
+        ? json(200, { entries: await leaderboard(eventId) })
+        : json(409, { error: "Run ID already exists with different score data" });
+    }
     for (let attempt = 0; attempt < 4; attempt++) {
       const event = await readEvent(eventId);
       if (!event) return json(404, { error: "Event not found" });
@@ -236,7 +257,12 @@ app.http("submitScore", {
         return json(200, { entries: await leaderboard(eventId) });
       } catch (error) {
         const statusCode = (error as { statusCode?: number }).statusCode;
-        if (statusCode === 409) return json(200, { entries: await leaderboard(eventId) });
+        if (statusCode === 409) {
+          const duplicate = await readScore(eventId, runId);
+          return duplicate && submittedScoresMatch(duplicate, entity)
+            ? json(200, { entries: await leaderboard(eventId) })
+            : json(409, { error: "Run ID already exists with different score data" });
+        }
         if (statusCode !== 412) throw error;
       }
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateScore, csvCell, rankScores } from "../src/ranking.js";
+import { calculateScore, csvCell, rankScores, submittedScoresMatch } from "../src/ranking.js";
 
 describe("leaderboard ranking", () => {
   it("calculates the same bounded score as the game client", () => {
@@ -32,5 +32,21 @@ describe("leaderboard ranking", () => {
     expect(csvCell("@SUM(A1:A2)")).toBe("\"'@SUM(A1:A2)\"");
     expect(csvCell("Player \"One\"")).toBe("\"Player \"\"One\"\"\"");
     expect(csvCell(42)).toBe("\"42\"");
+  });
+
+  it("only treats identical submitted score data as an idempotent retry", () => {
+    const score = {
+      runId: "run-1",
+      nickname: "Player",
+      eventId: "demo",
+      boothId: "A",
+      credentialsCompleted: 6,
+      wrongAnswers: 1,
+      elapsedMs: 20_000,
+      score: 6_000,
+      acceptedAt: "2026-01-01T00:00:00Z",
+    };
+    expect(submittedScoresMatch(score, { ...score, acceptedAt: "2026-01-02T00:00:00Z" })).toBe(true);
+    expect(submittedScoresMatch(score, { ...score, elapsedMs: 1_000 })).toBe(false);
   });
 });

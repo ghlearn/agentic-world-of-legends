@@ -122,4 +122,22 @@ describe("EventLeaderboard", () => {
     expect(updates).toEqual(["pending", "submitted"]);
     expect(localStorage.length).toBe(1);
   });
+
+  it("keeps ordinary run state working when browser storage is blocked", () => {
+    const blockedStorage = {
+      get length(): number { throw new DOMException("Blocked", "SecurityError"); },
+      clear: () => { throw new DOMException("Blocked", "SecurityError"); },
+      getItem: () => { throw new DOMException("Blocked", "SecurityError"); },
+      key: () => { throw new DOMException("Blocked", "SecurityError"); },
+      removeItem: () => { throw new DOMException("Blocked", "SecurityError"); },
+      setItem: () => { throw new DOMException("Blocked", "SecurityError"); },
+    } satisfies Storage;
+    vi.stubGlobal("sessionStorage", blockedStorage);
+    vi.stubGlobal("localStorage", blockedStorage);
+    vi.stubGlobal("crypto", { randomUUID: () => "blocked-run" });
+
+    expect(() => beginRun(undefined, "")).not.toThrow();
+    beginRun({ eventId: "demo", boothId: "A", apiUrl: "https://api.example" }, "Player", 1_000);
+    expect(currentRun(2_000)).toMatchObject({ runId: "blocked-run", elapsedMs: 1_000 });
+  });
 });
